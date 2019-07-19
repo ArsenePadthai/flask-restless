@@ -1178,16 +1178,45 @@ class API(ModelView):
             current_app.logger.exception(str(exception))
             return dict(message='Unable to construct query'), 400
 
-        # create a placeholder for the relations of the returned models
-        relations = frozenset(get_relations(self.model))
-        # do not follow relations that will not be included in the response
-        if self.include_columns is not None:
-            cols = frozenset(self.include_columns)
-            rels = frozenset(self.include_relations)
-            relations &= (cols | rels)
-        elif self.exclude_columns is not None:
-            relations -= frozenset(self.exclude_columns)
-        deep = dict((r, {}) for r in relations)
+        # hack to support multi-level relationship query ===
+        # # create a placeholder for the relations of the returned models
+        # relations = frozenset(get_relations(self.model))
+        # # do not follow relations that will not be included in the response
+        # if self.include_columns is not None:
+        #     cols = frozenset(self.include_columns)
+        #     rels = frozenset(self.include_relations)
+        #     relations &= (cols | rels)
+        # elif self.exclude_columns is not None:
+        #     relations -= frozenset(self.exclude_columns)
+        # deep = dict((r, {}) for r in relations)
+        def get_depth(model, paths):
+            # create a placeholder for the relations of the returned models
+            relations = frozenset(get_relations(model))
+            # do not follow relations that will not be included in the response
+            if self.include_columns is not None:
+                cols = frozenset(self.include_columns)
+                rels = frozenset(self.include_relations)
+                relations &= (cols | rels)
+            elif self.exclude_columns is not None:
+                relations -= frozenset(self.exclude_columns)
+            
+            deep_dict=dict()
+            for path in paths:
+                if '.' in path:
+                    current, rest = path.split('.', 1)
+                    if current in relations:
+                        deep_dict.update({current: get_depth(get_related_model(model, current), [rest])}) 
+                elif path in relations:
+                    deep_dict.update({path: {}})
+            return deep_dict
+        
+
+        query_paths = []
+        query_relations = request.args.get('query_relations', None)
+        if query_relations:
+            query_paths = json.loads(query_relations)
+        deep = get_depth(self.model, query_paths)
+        
 
         # for security purposes, don't transmit list as top-level JSON
         if isinstance(result, Query):
@@ -1228,9 +1257,7 @@ class API(ModelView):
         If ``instid`` is ``None``, this method returns the result of a search
         with parameters specified in the query string of the request. If no
         search parameters are specified, this method returns all instances of
-        the specified model.
-
-        If ``instid`` is an integer, this method returns the instance of the
+        the specified model. If ``instid`` is an integer, this method returns the instance of the
         model with that identifying integer. If no such instance exists, this
         method responds with :http:status:`404`.
 
